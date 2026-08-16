@@ -297,7 +297,7 @@ table.led th{color:var(--red-dk); font-size:.62rem; text-transform:uppercase;}
   body.print-cards-mode .combat-card .cc-name{color:var(--dim) !important;}
   body.print-cards-mode .combat-card .cc-move{font-size:9px; color:var(--red-dk) !important; text-shadow:none !important;}
   body.print-cards-mode .combat-card .cc-portrait{width:34mm !important; height:34mm !important; margin:0 auto 1.5mm !important; flex:0 0 auto !important; border-radius:2mm; background:#f1ece0 !important; border-color:var(--red-dk) !important;}
-  body.print-cards-mode .combat-card .cc-special{font-size:6px !important; color:var(--dim) !important; border-top-color:#d8cba8 !important;}
+  body.print-cards-mode .combat-card .cc-special{font-size:7px !important; color:var(--dim) !important; border-top-color:#d8cba8 !important;}
   body.print-cards-mode .combat-card .cc-stat .lbl{color:var(--gold) !important;}
   body.print-cards-mode .combat-card .cc-stat .val{font-size:11px; color:var(--ink) !important;}
   body.print-cards-mode .combat-card .cc-foot{color:var(--dim) !important;}
@@ -2022,26 +2022,37 @@ function statFromInfoField(rawText, campo, categoria){
   // Regra do livro (Cap.6 p.70 e Cap.7 p.111-112):
   // - Número COM sinal (+/-) => é um MODIFICADOR somado à base: Velocidade=Destreza+mod, Dano=Força+Técnica+mod, Movimento=Esportes+mod.
   // - Número/palavra SEM sinal (Um/Dois/Três) ou "Nenhum" => valor FIXO, não soma nada à base.
+  // A nota só aparece quando sobra informação que os campos numéricos não conseguem representar
+  // (ex: segundo modificador de dano, ressalva tipo "(máx.)"/"ou Dois", termo de fórmula não reconhecido).
+  const campoLabel={vel:'Velocidade',dano:'Dano',mov:'Movimento'}[campo];
+  function leftover(t,consumedLen){ const rest=t.slice(consumedLen).trim(); return rest?rest:null; }
   if(!rawText) return {value:0, note:null};
   const t=rawText.trim();
   if(/^nenhuma?$/i.test(stripAccents(t))) return {value:0, note:null};
   if(/^[+-]/.test(t)){
+    const numMatch=t.match(/^[+-]\d+/);
     const mod = parseModNum(t);
-    let base = 0, baseLabel='';
-    if(campo==='vel'){ base = attrTotal('Destreza'); baseLabel='Destreza('+base+')'; }
-    else if(campo==='dano'){ const tecV = (categoria && TEC_NAMES_FORMULA.includes(categoria)) ? tecTotalByName(categoria) : 0; base = attrTotal('Força')+tecV; baseLabel='Força+'+ (categoria||'Técnica') +'('+base+')'; }
-    else if(campo==='mov'){ base = tecTotalByName('Esportes'); baseLabel='Esportes('+base+')'; }
+    let base = 0;
+    if(campo==='vel'){ base = attrTotal('Destreza'); }
+    else if(campo==='dano'){ const tecV = (categoria && TEC_NAMES_FORMULA.includes(categoria)) ? tecTotalByName(categoria) : 0; base = attrTotal('Força')+tecV; }
+    else if(campo==='mov'){ base = tecTotalByName('Esportes'); }
     const total = base+mod;
-    const note = 'Total '+({vel:'Velocidade',dano:'Dano',mov:'Movimento'}[campo])+' = '+baseLabel+' '+(mod>=0?'+':'')+mod+' (mod. da manobra) = '+total;
+    const rest = numMatch?leftover(t,numMatch[0].length):t;
+    const note = rest ? (campoLabel+' completo (livro): "'+rawText.trim()+'"') : null;
     return {value: total, note};
   }
-  if(/^\d+$/.test(t) || /^(um|uma|umas|dois|duas|tr[eê]s)\b/i.test(stripAccents(t))){
-    return {value: parseModNum(t), note: null};
+  if(/^\d+$/.test(t)){
+    const rest=leftover(t,t.match(/^\d+/)[0].length);
+    return {value: parseModNum(t), note: rest?(campoLabel+' completo (livro): "'+rawText.trim()+'"'):null};
+  }
+  const wordFixed=t.match(/^(um|uma|umas|dois|duas|tr[eê]s)\b/i);
+  if(wordFixed){
+    const rest=leftover(t,wordFixed[0].length);
+    return {value: parseModNum(t), note: rest?(campoLabel+' completo (livro): "'+rawText.trim()+'"'):null};
   }
   const formula=resolveFormulaValue(t);
   if(formula){
-    let note='Fórmula ('+ (rawText.length<40?rawText:'ver texto') +'): '+formula.resolvedParts.join(' ')+' = '+formula.value;
-    if(!formula.fullyResolved) note+=' + '+formula.unresolvedParts.join(', ')+' (ver descrição)';
+    const note = formula.fullyResolved ? null : (campoLabel+' também soma: '+formula.unresolvedParts.join(', ')+' (ver descrição)');
     return {value: formula.value, note};
   }
   return {value:'—', note:null};
@@ -2063,19 +2074,23 @@ function addSpecialFromSheet(){
   const items = state.manobras.map(m=>`<div class="sf-list-item"><span class="lbl" onclick="addSpecialFromSheetPick('${m.nome.replace(/'/g,"\\'")}')">${m.nome} <span class="small">(${m.categoria} · custo ${m.custo})</span></span></div>`).join('');
   showModal(`<h3>Escolha a Manobra da ficha</h3><div style="max-height:320px;overflow-y:auto;">${items}</div><div class="sf-modal-actions"><button class="btn ghost" onclick="closeModal()">Cancelar</button></div>`);
 }
+function buildFichaCardData(nomeManobra, categoria, custoPP){
+  const info=MOVE_INFO[nomeManobra];
+  const velR = info?statFromInfoField(info.vel,'vel',categoria):{value:0,note:null};
+  const danoR = info?statFromInfoField(info.dano,'dano',categoria):{value:0,note:null};
+  const movR = info?statFromInfoField(info.mov,'mov',categoria):{value:0,note:null};
+  const notes = [velR.note,danoR.note,movR.note].filter(Boolean);
+  const baseText = info? `Custo: ${info.custo||'Nenhum'}.${info.sistema?(' '+(info.sistema.length>550?info.sistema.slice(0,550)+'…':info.sistema)):''}` : `Custo de Poder: ${custoPP}. Preencha os efeitos conforme o livro.`;
+  const especial = notes.length ? (baseText+' '+notes.join(' ')) : baseText;
+  return {velocidade:velR.value, dano:danoR.value, movimento:movR.value, especial};
+}
 function addSpecialFromSheetPick(nome){
   const m=state.manobras.find(x=>x.nome===nome); if(!m) return;
-  const info=MOVE_INFO[nome];
-  const velR = info?statFromInfoField(info.vel,'vel',m.categoria):{value:0,note:null};
-  const danoR = info?statFromInfoField(info.dano,'dano',m.categoria):{value:0,note:null};
-  const movR = info?statFromInfoField(info.mov,'mov',m.categoria):{value:0,note:null};
-  const notes = [velR.note,danoR.note,movR.note].filter(Boolean);
-  const baseText = info? `Custo: ${info.custo||'Nenhum'}.${info.sistema?(' '+(info.sistema.length>350?info.sistema.slice(0,350)+'…':info.sistema)):''}` : `Custo de Poder: ${m.custo}. Preencha os efeitos conforme o livro.`;
-  const especial = notes.length ? (baseText+' '+notes.join(' ')) : baseText;
+  const d = buildFichaCardData(m.nome, m.categoria, m.custo);
   cards.push(Object.assign({
     id:nextId(), manobra:m.nome, tecnica:m.categoria,
-    velocidade: velR.value, dano: danoR.value, movimento: movR.value,
-    especial, origem:{tipo:'ficha',nome:m.nome}
+    velocidade: d.velocidade, dano: d.dano, movimento: d.movimento,
+    especial: d.especial, origem:{tipo:'ficha',nome:m.nome}
   },newCardBase()));
   closeModal(); renderCards();
 }
@@ -2115,14 +2130,17 @@ function recomputeCardStats(c){
     const info=MOVE_INFO[o.nome]; if(!info) return false;
     const m=state.manobras.find(x=>x.nome===o.nome);
     const categoria=m?m.categoria:c.tecnica;
-    const velR=statFromInfoField(info.vel,'vel',categoria), danoR=statFromInfoField(info.dano,'dano',categoria), movR=statFromInfoField(info.mov,'mov',categoria);
-    c.velocidade=velR.value; c.dano=danoR.value; c.movimento=movR.value;
+    const d=buildFichaCardData(o.nome, categoria, m?m.custo:'');
+    c.velocidade=d.velocidade; c.dano=d.dano; c.movimento=d.movimento; c.especial=d.especial;
     return true;
   }
   return false;
 }
 function refreshAllCards(){
   if(!cards.length){ sfAlert('Não há cartas de combate para atualizar.'); return; }
+  sfConfirm('Isso recalcula Velocidade/Dano/Movimento de todas as cartas com os atributos e técnicas atuais da ficha. Para cartas de "Manobra da ficha" (ex: Jump, Fireball), o texto de descrição também é regerado a partir do livro — se você editou manualmente a descrição de alguma dessas cartas, a edição será perdida. Cartas Básicas e Bloqueio/Movimento/Apresamento têm só os números recalculados; o texto delas fica como está. Deseja continuar?', doRefreshAllCards, 'Atualizar valores das cartas');
+}
+function doRefreshAllCards(){
   let updated=0, skipped=0;
   cards.forEach(c=>{ if(recomputeCardStats(c)) updated++; else skipped++; });
   renderCards();
